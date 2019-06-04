@@ -9,7 +9,6 @@ import (
 	"io/ioutil"
 	"mime/multipart"
 	"net/http"
-	"net/http/httptrace"
 	"net/http/httputil"
 	"net/url"
 	"os"
@@ -46,6 +45,11 @@ const (
 	// FollowRedirects instructs a Browser to follow Location headers.
 	FollowRedirects
 )
+
+// HTTPRequestDecorator is invoked after a http.Request is created.
+// This mechanism can be used to attach http.ClientTrace in
+// supported environments.
+type HTTPRequestDecorator func(*http.Request) *http.Request
 
 // InitialAssetsSliceSize is the initial size when allocating a slice of page
 // assets. Increasing this size may lead to a very small performance increase
@@ -96,8 +100,11 @@ type Browsable interface {
 	// SetTransport sets the http library transport mechanism for each request.
 	SetTransport(rt http.RoundTripper)
 
-	// SetHTTPTrace sets the agent that traces the events within http client requests.
-	SetHTTPTrace(ct *httptrace.ClientTrace)
+	// SetHTTPRequestDecorator sets the decorator to be used on
+	// subsequent http requests created.
+	// A decorator can be used for attaching additional functionality, such as tracing,
+	// to a request.
+	SetHTTPRequestDecorator(decorator HTTPRequestDecorator)
 
 	// AddRequestHeader adds a header the browser sends with each request.
 	AddRequestHeader(name, value string)
@@ -220,8 +227,8 @@ type Browser struct {
 	// body of the current page.
 	body []byte
 
-	// http event tracer
-	clientTrace *httptrace.ClientTrace
+	// http request decorator.
+	httpRequestDecorator HTTPRequestDecorator
 }
 
 // buildClient instanciates the *http.Client used by the browser
@@ -574,9 +581,12 @@ func (bow *Browser) SetTransport(rt http.RoundTripper) {
 	bow.client.Transport = rt
 }
 
-// SetHTTPTrace sets the agent that traces the events within http client requests.
-func (bow *Browser) SetHTTPTrace(ct *httptrace.ClientTrace) {
-	bow.clientTrace = ct
+// SetHTTPRequestDecorator sets the decorator to be used on
+// subsequent http requests created.
+// A decorator can be used for attaching additional functionality, such as tracing,
+// to a request.
+func (bow *Browser) SetHTTPRequestDecorator(decorator HTTPRequestDecorator) {
+	bow.httpRequestDecorator = decorator
 }
 
 // AddRequestHeader sets a header the browser sends with each request.
@@ -670,9 +680,8 @@ func (bow *Browser) buildRequest(method, url string, ref *url.URL, body io.Reade
 		return nil, err
 	}
 
-	// Enable tracing if requested
-	if bow.clientTrace != nil {
-		req = req.WithContext(httptrace.WithClientTrace(req.Context(), bow.clientTrace))
+	if bow.httpRequestDecorator != nil {
+		req = bow.httpRequestDecorator(req)
 	}
 
 	req.Header = copyHeaders(bow.headers)
